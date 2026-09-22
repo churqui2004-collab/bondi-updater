@@ -1,0 +1,15 @@
+name: Bondi 62
+on:
+  schedule:
+    - cron: '* * * * *'
+  workflow_dispatch:
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Actualizar Firebase
+        run: |
+          MINUTOS=$(( (RANDOM % 15) + 2 ))
+          JSON="{\"linea\":\"62\",\"minutos\":$MINUTOS,\"parada\":\"Cordoba\",\"actualizado\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+          echo $JSON
+          curl -X PUT -H "Content-Type: application/json" -d "$JSON" "https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json"
