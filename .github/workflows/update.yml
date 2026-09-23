@@ -10,84 +10,63 @@ jobs:
       - run: |
           pip install requests -q
           python3 << 'PY'
-          import requests, json, datetime, urllib3, math
+          import requests, json, datetime, urllib3
           urllib3.disable_warnings()
 
-          # ESTA ES LA URL REAL QUE ME PASASTE
-          # Ahora probamos con la ruta 59 que es la del 62
-          url = "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php"
-
-          # La parada 81 esta en la ruta 59 del 62
-          # Esta API devuelve TODOS los coches de la ruta y calculamos el mas cercano a tu parada
-          params = {
-              "cmd": "consultacocheporruta",
-              "ruta": "59",
-              "conf": "cbaciudad"
+          # Vamos a copiar EXACTO lo que hace tu navegador
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+              "Accept": "application/json, text/javascript, */*; q=0.01",
+              "Referer": "https://micronauta4.dnsalias.net/usuario/",
+              "Origin": "https://micronauta4.dnsalias.net"
           }
 
-          minutos_final = 99
-          coche_cercano = None
+          # PROBAMOS TODAS LAS VARIANTES POSIBLES CON /usuario/
+          urls_a_probar = [
+              "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php?cmd=consultacocheporruta&ruta=59&conf=cbaciudad",
+              "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php?cmd=consultacocheporruta&ruta=59",
+              "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php?cmd=consultacocheporparada&parada=81&conf=cbaciudad",
+              "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php?cmd=consultacochesporparada&parada=81&conf=cbaciudad",
+              "https://micronauta4.dnsalias.net/web/urbano2_cmd.php?cmd=consultacocheporparada&parada=81&conf=cbaciudad",
+          ]
 
-          try:
-              print(f"Consultando: {url} con {params}")
-              r = requests.get(url, params=params, verify=False, timeout=15)
-              print(f"Status: {r.status_code}")
-              data = r.json()
-              print(f"Respuesta: {json.dumps(data)[:1000]}")
+          minutos = 99
+          coche_data = None
 
-              # Si viene con 'coches' o es lista directa
-              coches = data.get("coches") if isinstance(data, dict) else data
-              if coches:
-                  # Buscar el que tiene menor tiempo/demora (el mas proximo a parada 81)
-                  # Tu JSON anterior tenia demora_minutos: 31.83 y tiempo: +00:05:02
-                  # Usamos demora_minutos
-                  mejor = None
-                  min_demora = 999
-                  for c in coches:
-                      if str(c.get("linea")) == "62":
-                          d = c.get("demora_minutos")
-                          if d is not None and d < min_demora and d >= 0:
-                              min_demora = d
-                              mejor = c
-                  if mejor:
-                      coche_cercano = mejor
-                      minutos_final = int(math.ceil(float(mejor.get("demora_minutos", 0))))
-                      print(f"ENCONTRADO: Coche {mejor.get('coche')} - {minutos_final} min - {mejor.get('demora')}")
-          except Exception as e:
-              print(f"Error: {e}")
-
-          # Si consultacocheporruta no da parada especifica, probamos el otro endpoint que si filtra por parada
-          if minutos_final == 99:
+          for test_url in urls_a_probar:
               try:
-                  url2 = "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php"
-                  p2 = {"cmd": "consultacocheporparada", "parada": "81", "conf": "cbaciudad"}
-                  print(f"Probando plan B: {p2}")
-                  r2 = requests.get(url2, params=p2, verify=False, timeout=15)
-                  print(r2.text[:1500])
-                  d2 = r2.json()
-                  coches2 = d2.get("coches", [])
-                  for c in coches2:
-                      if str(c.get("linea")) == "62":
-                          coche_cercano = c
-                          minutos_final = int(math.ceil(float(c.get("demora_minutos", 99))))
+                  print(f"\n>>> Probando: {test_url}")
+                  r = requests.get(test_url, headers=headers, verify=False, timeout=15)
+                  print(f"Status: {r.status_code} | Largo: {len(r.text)}")
+                  print(f"Texto: {r.text[:1500]}")
+                  if "coches" in r.text and "62" in r.text:
+                      data = r.json()
+                      coches = data.get("coches", []) if isinstance(data, dict) else data
+                      for c in coches:
+                          if str(c.get("linea")) == "62":
+                              minutos = int(float(c.get("demora_minutos", 99)))
+                              coche_data = c
+                              print(f"¡ENCONTRADO! {minutos} min - Coche {c.get('coche')}")
+                              break
+                      if minutos != 99:
                           break
               except Exception as e:
-                  print(f"Plan B fallo: {e}")
+                  print(f"Error: {e}")
 
-          print(f"RESULTADO FINAL: {minutos_final} minutos")
+          print(f"\n=== FINAL: {minutos} minutos ===")
 
           payload = {
               "linea": "62",
               "parada": "81",
-              "minutos": minutos_final,
-              "coche": coche_cercano.get("coche") if coche_cercano else "0",
-              "demora_texto": coche_cercano.get("demora") if coche_cercano else "",
-              "actualizado": datetime.datetime.utcnow().isoformat() + "Z"
+              "minutos": minutos,
+              "coche": coche_data.get("coche") if coche_data else "0",
+              "demora_texto": coche_data.get("demora") if coche_data else "",
+              "actualizado": datetime.datetime.utcnow().isoformat() + "Z",
+              "debug_url": test_url if 'test_url' in locals() else ""
           }
 
           import subprocess
           j = json.dumps(payload)
           subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',j,'https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json'])
           subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',j,'https://myesp8266-fbf11.firebaseio.com/bondis/62.json'])
-          print(f"Subido a Firebase: {j}")
           PY
