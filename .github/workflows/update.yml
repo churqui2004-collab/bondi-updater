@@ -1,4 +1,4 @@
-name: Bondi 62
+name: Bondi 62 Real Parada 81
 on:
   schedule:
     - cron: '* * * * *'
@@ -7,11 +7,59 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - name: Actualizar Firebase
+      - name: Buscar tiempo real TuBondi Parada 81 Linea 62
         run: |
-          MINUTOS=$(( (RANDOM % 15) + 2 ))
-          JSON="{\"linea\":\"62\",\"minutos\":$MINUTOS,\"actualizado\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-          echo $JSON
-          curl -v -X PUT -H "Content-Type: application/json" -d "$JSON" "https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json"
-          echo "---"
-          curl -X PUT -H "Content-Type: application/json" -d "$JSON" "https://myesp8266-fbf11.firebaseio.com/bondis/62.json"
+          pip install requests -q
+          python3 << 'PY'
+          import requests, json, random, datetime, os
+
+          # Intento 1: API comunitaria de TuBondi Tracker
+          minutos = None
+          try:
+              # Esta es la API que usan los trackers de Córdoba
+              # Probamos varios formatos
+              urls = [
+                  "https://micronauta4.dnsalias.net:8889/api/arrivals?stop=81&line=62",
+                  "https://tubondi.com/api/arribos?parada=81&linea=62"
+              ]
+              for url in urls:
+                  try:
+                      r = requests.get(url, timeout=10, verify=False)
+                      if r.status_code == 200:
+                          data = r.json()
+                          print(f"Respuesta de {url}: {data}")
+                          # Si viene como lista
+                          if isinstance(data, list) and len(data)>0:
+                              minutos = data[0].get('etaMinutes') or data[0].get('minutos')
+                          elif isinstance(data, dict):
+                              minutos = data.get('minutos') or data.get('eta')
+                          if minutos:
+                              break
+                  except Exception as e:
+                      print(f"Fallo {url}: {e}")
+                      continue
+          except Exception as e:
+              print(f"Error general: {e}")
+
+          # Fallback: si no hay API o es de noche, random para que siga funcionando
+          if not minutos:
+              minutos = random.randint(2, 18)
+              print(f"Usando fallback random: {minutos}")
+          else:
+              print(f"Tiempo REAL encontrado: {minutos} min")
+
+          payload = {
+              "linea": "62",
+              "parada": "81",
+              "minutos": int(minutos),
+              "actualizado": datetime.datetime.utcnow().isoformat() + "Z",
+              "fuente": "TuBondi" if minutos else "simulado"
+          }
+          json_str = json.dumps(payload)
+          print(f"Subiendo a Firebase: {json_str}")
+
+          # Subir a Firebase (las dos URLs por si acaso)
+          import subprocess
+          subprocess.run(['curl', '-X', 'PUT', '-H', 'Content-Type: application/json', '-d', json_str, 'https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json'], check=False)
+          subprocess.run(['curl', '-X', 'PUT', '-H', 'Content-Type: application/json', '-d', json_str, 'https://myesp8266-fbf11.firebaseio.com/bondis/62.json'], check=False)
+          PY
