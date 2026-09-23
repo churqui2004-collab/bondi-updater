@@ -1,7 +1,7 @@
 name: Bondi 62 Real Parada 81
 on:
   schedule:
-    - cron: '* * * * *'
+    - cron: '*/2 * * * *'
   workflow_dispatch:
 jobs:
   update:
@@ -10,68 +10,56 @@ jobs:
       - run: |
           pip install requests -q
           python3 << 'PY'
-          import requests, json, datetime, time, urllib3, math
+          import requests, json, datetime, math, urllib3
           urllib3.disable_warnings()
 
           url = "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php?cmd=consultacocheporruta"
 
-          # Datos EXACTOS de tu navegador, con tu parada TN12 = Parada 81
-          data = {
-              "ruta": "59",
-              "coche": "0",
-              "cliente": "411",
-              "parada_seleccionada": "TN12",
-              "conf": "cbaciudad",
-              "operacion": str(int(time.time()*1000))  # numero random como hace la web
-          }
-
+          # Usamos EXACTO tu cURL, con tu PHPSESSID y tu operacion
+          # Esta cookie vence, pero para probar ahora mismo sirve
           headers = {
               "Content-Type": "application/x-www-form-urlencoded",
               "Accept": "*/*",
               "Origin": "https://micronauta4.dnsalias.net",
               "Referer": "https://micronauta4.dnsalias.net/usuario/",
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-              "X-Device-FlakerParam": "283bd602072334b9b864737bc71c587c67f4ae74c03268ae6c6eadc6168ccade"
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+              "X-Device-FlakerParam": "283bd602072334b9b864737bc71c587c67f4ae74c03268ae6c6eadc6168ccade",
+              "Cookie": "_ga=GA1.1.1931230609.1787356757; PHPSESSID=uh7mdhg692bnbk0bo2q593v0ua; _ga_L9Q5RK5KL9=GS2.1.s1790130308$o3$g0$t1790130308$j60$l0$h0"
           }
+
+          # Prueba 1: EXACTA a la tuya con operacion original
+          tests = [
+              {"ruta":"59","coche":"0","cliente":"411","parada_seleccionada":"TN12","conf":"cbaciudad","operacion":"18318678352394823351"},
+              {"ruta":"59","coche":"0","cliente":"411","parada_seleccionada":"TN12","conf":"cbaciudad","operacion":"0"},
+              {"ruta":"59","coche":"0","cliente":"411","conf":"cbaciudad","operacion":"18318678352394823351"}, # sin parada
+              {"ruta":"59","conf":"cbaciudad"},
+          ]
 
           minutos = 99
           coche_data = None
 
-          try:
-              print(f"POST a {url} con {data}")
-              r = requests.post(url, data=data, headers=headers, verify=False, timeout=15)
-              print(f"Status: {r.status_code}")
-              print(f"Respuesta cruda: {r.text[:2000]}")
-              
-              j = r.json()
-              coches = j.get("coches", [])
-              print(f"Coches encontrados: {len(coches)}")
-              
-              # Buscar linea 62 y quedarnos con el de menor demora
-              mejor = None
-              min_demora = 9999
-              for c in coches:
-                  if str(c.get("linea")) == "62":
-                      d = c.get("demora_minutos")
-                      if d is not None:
-                          if d < min_demora:
-                              min_demora = d
-                              mejor = c
-              
-              if mejor:
-                  coche_data = mejor
-                  minutos = int(math.ceil(float(mejor.get("demora_minutos"))))
-                  print(f"¡BINGO! Coche {mejor.get('coche')} - {mejor.get('demora')} -> {minutos} min")
-              else:
-                  print("No hay coches de linea 62 en este momento")
-                  minutos = 0 # 0 = sin servicio o ya paso
+          for data in tests:
+              try:
+                  print(f"\n>>> PROBANDO: {data}")
+                  r = requests.post(url, data=data, headers=headers, verify=False, timeout=15)
+                  print(f"Status {r.status_code} - {r.text[:2000]}")
+                  if "coches" in r.text:
+                      j = r.json()
+                      coches = j.get("coches", [])
+                      print(f"Coches: {len(coches)}")
+                      for c in coches:
+                          print(f"  Linea {c.get('linea')} Coche {c.get('coche')} demora {c.get('demora')} demora_min {c.get('demora_minutos')}")
+                          if str(c.get("linea"))=="62" and c.get("demora_minutos") is not None:
+                              if coche_data is None or c.get("demora_minutos") < coche_data.get("demora_minutos",999):
+                                  coche_data = c
+                      if coche_data:
+                          minutos = int(math.ceil(float(coche_data.get("demora_minutos"))))
+                          print(f"==> GANADOR: {minutos} min")
+                          break
+              except Exception as e:
+                  print(f"Error: {e}")
 
-          except Exception as e:
-              print(f"Error: {e}")
-              import traceback
-              traceback.print_exc()
-
-          print(f"FINAL PARA LCD: {minutos} min")
+          print(f"\nFINAL: {minutos}")
 
           payload = {
               "linea": "62",
@@ -79,13 +67,12 @@ jobs:
               "parada_codigo": "TN12",
               "minutos": minutos,
               "coche": coche_data.get("coche") if coche_data else "0",
-              "demora_texto": coche_data.get("demora") if coche_data else "sin servicio",
-              "actualizado": datetime.datetime.utcnow().isoformat() + "Z"
+              "demora_texto": coche_data.get("demora") if coche_data else "sin datos",
+              "actualizado": datetime.datetime.utcnow().isoformat() + "Z",
+              "total_coches_vistos": len(coches) if 'coches' in locals() else 0
           }
-
-          import subprocess
-          js = json.dumps(payload)
-          subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',js,'https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json'])
-          subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',js,'https://myesp8266-fbf11.firebaseio.com/bondis/62.json'])
-          print(f"Subido a Firebase: {js}")
+          import subprocess, json as js
+          j = js.dumps(payload)
+          subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',j,'https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json'])
+          print(j)
           PY
