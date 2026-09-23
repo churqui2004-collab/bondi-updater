@@ -7,87 +7,86 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - name: Tiempo Real Parada 81
-        run: |
+      - run: |
           pip install requests -q
           python3 << 'PY'
-          import requests, json, datetime, urllib3
+          import requests, json, datetime, urllib3, math
           urllib3.disable_warnings()
 
-          # Esta es la API REAL que encontraste
-          # Es la que usa tubondi.com por dentro
-          url = "https://micronauta4.dnsalias.net/web/urbano2_cmd.php"
+          # ESTA ES LA URL REAL QUE ME PASASTE
+          # Ahora probamos con la ruta 59 que es la del 62
+          url = "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php"
+
+          # La parada 81 esta en la ruta 59 del 62
+          # Esta API devuelve TODOS los coches de la ruta y calculamos el mas cercano a tu parada
           params = {
-              "cmd": "consultacocheporparada",
-              "conf": "cbaciudad",
-              "parada": "81",
-              "linea": "62"
+              "cmd": "consultacocheporruta",
+              "ruta": "59",
+              "conf": "cbaciudad"
           }
-          # A veces pide estos params, probamos con varios formatos
-          intentos = [
-              {"cmd": "consultacocheporparada", "parada": "81", "linea": "62", "conf": "cbaciudad"},
-              {"cmd": "consultacochesporparada", "parada": "81", "conf": "cbaciudad"},
-              {"cmd": "consultaarribos", "parada": "81", "conf": "cbaciudad"},
-          ]
 
-          minutos_final = None
-          coche_info = None
+          minutos_final = 99
+          coche_cercano = None
 
-          for p in intentos:
-              try:
-                  print(f"Probando: {p}")
-                  r = requests.get(url, params=p, timeout=15, verify=False)
-                  print(f"Status {r.status_code} - {r.text[:500]}")
-                  data = r.json()
-                  if "coches" in data and len(data["coches"]) > 0:
-                      # Filtrar linea 62
-                      for c in data["coches"]:
-                          if c.get("linea") == "62":
-                              coche_info = c
-                              minutos_final = c.get("demora_minutos") or c.get("demora")
-                              break
-                      if not coche_info:
-                          coche_info = data["coches"][0]
-                          minutos_final = coche_info.get("demora_minutos")
-                      break
-              except Exception as e:
-                  print(f"Error con {p}: {e}")
-                  continue
-
-          if minutos_final is None:
-              print("No se pudo obtener real, intentando endpoint alternativo del mapa...")
-              # Endpoint alternativo que viste en Network
-              try:
-                  r2 = requests.get("https://micronauta4.dnsalias.net/web/urbano2_cmd.php?cmd=consultacochepos&conf=cbaciudad", timeout=15, verify=False)
-                  print(r2.text[:1000])
-              except:
-                  pass
-              minutos_final = 99
-
-          # Limpiar minutos - puede venir "31.83" o "32min"
           try:
-              if isinstance(minutos_final, str):
-                  minutos_final = int(''.join(filter(str.isdigit, minutos_final))[:2] or 99)
-              else:
-                  minutos_final = int(float(minutos_final))
-          except:
-              minutos_final = 99
+              print(f"Consultando: {url} con {params}")
+              r = requests.get(url, params=params, verify=False, timeout=15)
+              print(f"Status: {r.status_code}")
+              data = r.json()
+              print(f"Respuesta: {json.dumps(data)[:1000]}")
 
-          print(f"MINUTOS FINALES PARA LCD: {minutos_final}")
+              # Si viene con 'coches' o es lista directa
+              coches = data.get("coches") if isinstance(data, dict) else data
+              if coches:
+                  # Buscar el que tiene menor tiempo/demora (el mas proximo a parada 81)
+                  # Tu JSON anterior tenia demora_minutos: 31.83 y tiempo: +00:05:02
+                  # Usamos demora_minutos
+                  mejor = None
+                  min_demora = 999
+                  for c in coches:
+                      if str(c.get("linea")) == "62":
+                          d = c.get("demora_minutos")
+                          if d is not None and d < min_demora and d >= 0:
+                              min_demora = d
+                              mejor = c
+                  if mejor:
+                      coche_cercano = mejor
+                      minutos_final = int(math.ceil(float(mejor.get("demora_minutos", 0))))
+                      print(f"ENCONTRADO: Coche {mejor.get('coche')} - {minutos_final} min - {mejor.get('demora')}")
+          except Exception as e:
+              print(f"Error: {e}")
+
+          # Si consultacocheporruta no da parada especifica, probamos el otro endpoint que si filtra por parada
+          if minutos_final == 99:
+              try:
+                  url2 = "https://micronauta4.dnsalias.net/usuario/urbano2_cmd.php"
+                  p2 = {"cmd": "consultacocheporparada", "parada": "81", "conf": "cbaciudad"}
+                  print(f"Probando plan B: {p2}")
+                  r2 = requests.get(url2, params=p2, verify=False, timeout=15)
+                  print(r2.text[:1500])
+                  d2 = r2.json()
+                  coches2 = d2.get("coches", [])
+                  for c in coches2:
+                      if str(c.get("linea")) == "62":
+                          coche_cercano = c
+                          minutos_final = int(math.ceil(float(c.get("demora_minutos", 99))))
+                          break
+              except Exception as e:
+                  print(f"Plan B fallo: {e}")
+
+          print(f"RESULTADO FINAL: {minutos_final} minutos")
 
           payload = {
               "linea": "62",
               "parada": "81",
-              "parada_nombre": "jose Isseas 1428",
               "minutos": minutos_final,
-              "coche": coche_info.get("coche") if coche_info else "0",
-              "lat": coche_info.get("lat") if coche_info else 0,
-              "lon": coche_info.get("lon") if coche_info else 0,
+              "coche": coche_cercano.get("coche") if coche_cercano else "0",
+              "demora_texto": coche_cercano.get("demora") if coche_cercano else "",
               "actualizado": datetime.datetime.utcnow().isoformat() + "Z"
           }
 
-          import subprocess, json as js
-          j = js.dumps(payload)
+          import subprocess
+          j = json.dumps(payload)
           subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',j,'https://myesp8266-fbf11-default-rtdb.firebaseio.com/bondis/62.json'])
           subprocess.run(['curl','-s','-X','PUT','-H','Content-Type: application/json','-d',j,'https://myesp8266-fbf11.firebaseio.com/bondis/62.json'])
           print(f"Subido a Firebase: {j}")
